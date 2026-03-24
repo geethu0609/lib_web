@@ -1,6 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  BookOpen, Bell, ShieldAlert, Zap, Square,
+  CheckCircle2, AlertTriangle, Clock, Radio
+} from 'lucide-react';
 import api from '../api/axios';
-import Navbar from '../components/Navbar';
+import Layout from '../components/Layout';
+import StatCard from '../components/StatCard';
+import Badge from '../components/Badge';
+import Btn from '../components/Btn';
+
+const tabTitles = {
+  assignments:   'My Assignments',
+  monitor:       'Live Monitor',
+  notifications: 'Notifications',
+};
 
 const FacultyDashboard = () => {
   const [tab, setTab] = useState('assignments');
@@ -11,20 +25,16 @@ const FacultyDashboard = () => {
   const [msg, setMsg] = useState('');
   const pollRef = useRef(null);
 
-  const fetchAssignments = async () => {
-    const { data } = await api.get('/faculty/channels');
-    setAssignments(data);
-  };
+  const fetchAssignments  = async () => { const { data } = await api.get('/faculty/channels'); setAssignments(data); };
+  const fetchNotifications = async () => { const { data } = await api.get('/notifications'); setNotifications(data); };
 
-  const fetchNotifications = async () => {
-    const { data } = await api.get('/notifications');
-    setNotifications(data);
-  };
+  useEffect(() => { fetchAssignments(); fetchNotifications(); }, []);
 
   useEffect(() => {
-    fetchAssignments();
-    fetchNotifications();
-  }, []);
+    if (tab === 'notifications') {
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true, read: true })));
+    }
+  }, [tab]);
 
   const fetchEvents = async (roomId) => {
     const { data } = await api.get(`/faculty/rooms/${roomId}/events`);
@@ -48,7 +58,9 @@ const FacultyDashboard = () => {
   const handleActivate = async (roomId) => {
     try {
       await api.post(`/faculty/rooms/${roomId}/activate`);
-      fetchAssignments();
+      setAssignments(prev => prev.map(a =>
+        a.room._id === roomId ? { ...a, room: { ...a.room, status: 'active' } } : a
+      ));
       startMonitoring(roomId);
       setTab('monitor');
     } catch (err) {
@@ -56,204 +68,316 @@ const FacultyDashboard = () => {
     }
   };
 
-  const handleDismiss = async (eventId) => {
-    await api.post(`/faculty/events/${eventId}/dismiss`);
-    fetchEvents(activeRoom);
-  };
-
-  const handleInformAdmin = async (eventId) => {
-    await api.post(`/faculty/events/${eventId}/inform`);
-    fetchEvents(activeRoom);
-    fetchNotifications();
-  };
-
-  const handleMockEvent = async (roomId) => {
-    try {
-      await api.post(`/ai/mock-event/${roomId}`);
-      fetchEvents(roomId);
-    } catch (err) {
-      setMsg(err.response?.data?.message || 'Error generating event');
+  const handleStop = async () => {
+    if (activeRoom) {
+      try {
+        await api.post(`/faculty/rooms/${activeRoom}/deactivate`);
+        setAssignments(prev => prev.map(a =>
+          a.room._id === activeRoom ? { ...a, room: { ...a.room, status: 'inactive' } } : a
+        ));
+      } catch {}
     }
+    stopMonitoring();
   };
 
-  const markRead = async (id) => {
-    await api.patch(`/notifications/${id}/read`);
-    fetchNotifications();
+  const handleDismiss     = async (id) => { await api.post(`/faculty/events/${id}/dismiss`); fetchEvents(activeRoom); };
+  const handleInformAdmin = async (id) => { await api.post(`/faculty/events/${id}/inform`); fetchEvents(activeRoom); fetchNotifications(); };
+  const handleMockEvent   = async (roomId) => {
+    try { await api.post(`/ai/mock-event/${roomId}`); fetchEvents(roomId); }
+    catch (err) { setMsg(err.response?.data?.message || 'Error generating event'); }
   };
+  const markRead = async (id) => { await api.patch(`/notifications/${id}/read`); fetchNotifications(); };
 
-  const statusBadge = (s) => {
-    const colors = { inactive: '#718096', active: '#276749', completed: '#2b6cb0' };
-    return <span style={{ ...styles.badge, background: colors[s] || '#718096' }}>{s}</span>;
-  };
-
-  const eventStatusBadge = (s) => {
-    const colors = { pending: '#b7791f', dismissed: '#718096', confirmed: '#c0392b' };
-    return <span style={{ ...styles.badge, background: colors[s] || '#718096' }}>{s}</span>;
-  };
+  const unread        = notifications.filter(n => !n.isRead && !n.read).length;
+  const activeCount   = assignments.filter(a => a.room?.status === 'active').length;
+  const pendingEvents = events.filter(e => e.status === 'pending').length;
 
   return (
-    <div style={styles.page}>
-      <Navbar />
-      <div style={styles.container}>
-        <div style={styles.tabs}>
-          {['assignments', 'monitor', 'notifications'].map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{ ...styles.tab, ...(tab === t ? styles.activeTab : {}) }}>
-              {t === 'assignments' ? 'My Assignments' : t === 'monitor' ? 'Live Monitor' : `Notifications${notifications.filter(n => !n.read).length > 0 ? ` (${notifications.filter(n => !n.read).length})` : ''}`}
-            </button>
-          ))}
-        </div>
+    <Layout tab={tab} setTab={setTab} title={tabTitles[tab]}>
 
-        {msg && <p style={{ color: '#c0392b', marginBottom: '1rem' }}>{msg}</p>}
+      {/* ── Stats ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-7">
+        <StatCard icon={BookOpen}    label="Assignments"    value={assignments.length} color="#6366f1" bg="#eef2ff" />
+        <StatCard icon={Radio}       label="Active Rooms"   value={activeCount}        color="#059669" bg="#ecfdf5" sub={activeCount > 0 ? 'Monitoring' : undefined} />
+        <StatCard icon={ShieldAlert} label="Pending Alerts" value={pendingEvents}      color="#dc2626" bg="#fef2f2" sub={pendingEvents > 0 ? 'Action needed' : undefined} />
+        <StatCard icon={Bell}        label="Unread Notifs"  value={unread}             color="#d97706" bg="#fffbeb" />
+      </div>
 
+      {/* Error banner */}
+      {msg && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className="mb-5 flex items-center gap-2.5 p-3.5 rounded-xl text-sm"
+          style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
+          <AlertTriangle size={14} className="flex-shrink-0" /> {msg}
+        </motion.div>
+      )}
+
+      <AnimatePresence mode="wait">
+
+        {/* ══ ASSIGNMENTS ══ */}
         {tab === 'assignments' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Assigned Exam Rooms</h2>
-            {assignments.length === 0 ? <p style={styles.empty}>No assignments yet.</p> : (
-              <table style={styles.table}>
-                <thead>
-                  <tr style={styles.thead}>
-                    <th style={styles.th}>Exam Name</th>
-                    <th style={styles.th}>Date</th>
-                    <th style={styles.th}>Time</th>
-                    <th style={styles.th}>Room</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {assignments.map(({ room, channel }) => (
-                    <tr key={room._id} style={styles.tr}>
-                      <td style={styles.td}>{channel?.exam_name || '—'}</td>
-                      <td style={styles.td}>{channel?.date ? new Date(channel.date).toLocaleDateString() : '—'}</td>
-                      <td style={styles.td}>{channel?.start_time} – {channel?.end_time}</td>
-                      <td style={styles.td}>{room.room_number}</td>
-                      <td style={styles.td}>{statusBadge(room.status)}</td>
-                      <td style={styles.td}>
-                        {room.status === 'inactive' ? (
-                          <button style={styles.activateBtn} onClick={() => handleActivate(room._id)}>Activate</button>
-                        ) : (
-                          <button style={styles.monitorBtn} onClick={() => { startMonitoring(room._id); setTab('monitor'); }}>
-                            Monitor
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-
-        {tab === 'monitor' && (
-          <div style={styles.section}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={styles.sectionTitle}>
-                Live Monitoring {activeRoom ? <span style={{ color: '#276749', fontSize: '0.85rem' }}>● Active</span> : <span style={{ color: '#718096', fontSize: '0.85rem' }}>○ Inactive</span>}
-              </h2>
-              <div style={{ display: 'flex', gap: '0.6rem' }}>
-                {activeRoom && (
-                  <>
-                    <button style={styles.mockBtn} onClick={() => handleMockEvent(activeRoom)}>Simulate AI Alert</button>
-                    <button style={styles.stopBtn} onClick={stopMonitoring}>Stop Monitoring</button>
-                  </>
-                )}
+          <motion.div key="assignments"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">Assigned Exam Rooms</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{assignments.length} assignment{assignments.length !== 1 ? 's' : ''}</p>
               </div>
             </div>
 
-            {!activeRoom ? (
-              <p style={styles.empty}>No active room. Go to Assignments and click Activate or Monitor.</p>
-            ) : events.length === 0 ? (
-              <p style={styles.empty}>No malpractice events detected. Click "Simulate AI Alert" to generate a mock event.</p>
+            {assignments.length === 0 ? (
+              <EmptyState message="No assignments yet. Check back after the admin creates a channel." />
             ) : (
-              <div style={styles.eventGrid}>
-                {events.map(ev => (
-                  <div key={ev._id} style={styles.eventCard}>
-                    <img src={ev.image_url} alt="Evidence" style={styles.eventImg} />
-                    <div style={styles.eventBody}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={styles.eventTime}>{new Date(ev.timestamp).toLocaleString()}</span>
-                        {eventStatusBadge(ev.status)}
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Exam Name', 'Date', 'Time', 'Room', 'Status', 'Action'].map(h => <th key={h}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.map(({ room, channel }) => (
+                      <tr key={room._id}>
+                        <td className="font-semibold text-slate-800">{channel?.exam_name || '—'}</td>
+                        <td>{channel?.date ? new Date(channel.date).toLocaleDateString() : '—'}</td>
+                        <td className="font-mono text-xs">{channel?.start_time} – {channel?.end_time}</td>
+                        <td>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold"
+                            style={{ background: '#eef2ff', color: '#4f46e5' }}>
+                            <BookOpen size={10} /> {room.room_number}
+                          </span>
+                        </td>
+                        <td><Badge status={room.status} /></td>
+                        <td>
+                          {room.status === 'inactive' ? (
+                            <Btn variant="success" size="sm" onClick={() => handleActivate(room._id)}>Activate</Btn>
+                          ) : (
+                            <Btn variant="primary" size="sm" onClick={() => { startMonitoring(room._id); setTab('monitor'); }}>
+                              Monitor
+                            </Btn>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ══ LIVE MONITOR ══ */}
+        {tab === 'monitor' && (
+          <motion.div key="monitor"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+          >
+            {/* Status bar */}
+            <div className="monitor-bar">
+              <div className="flex items-center gap-3">
+                <div className="relative flex items-center justify-center w-3 h-3">
+                  {activeRoom && <span className="ping-ring" style={{ background: '#10b981' }} />}
+                  <span className={`relative w-2.5 h-2.5 rounded-full ${activeRoom ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                </div>
+                <span className="text-sm font-semibold text-slate-700">
+                  {activeRoom ? 'Session Active' : 'No Active Session'}
+                </span>
+                {activeRoom && <span className="text-xs text-slate-400 hidden sm:inline">· Auto-refreshing every 8s</span>}
+              </div>
+              {activeRoom && (
+                <div className="flex items-center gap-2">
+                  <Btn variant="amber" size="sm" icon={Zap} onClick={() => handleMockEvent(activeRoom)}>
+                    Simulate AI Alert
+                  </Btn>
+                  <Btn variant="danger" size="sm" icon={Square} onClick={handleStop}>Stop</Btn>
+                </div>
+              )}
+            </div>
+
+            {/* States */}
+            {!activeRoom ? (
+              <div className="card">
+                <div className="empty-state">
+                  <div className="empty-icon-wrap" style={{ background: '#f1f5f9' }}>
+                    <Radio size={22} color="#cbd5e1" />
+                  </div>
+                  <p className="text-sm text-slate-500">No active room.</p>
+                  <p className="text-xs text-slate-400">Go to <strong>My Assignments</strong> and click <strong>Activate</strong>.</p>
+                </div>
+              </div>
+            ) : events.length === 0 ? (
+              <div className="card">
+                <div className="empty-state">
+                  <div className="empty-icon-wrap" style={{ background: '#ecfdf5' }}>
+                    <CheckCircle2 size={22} color="#10b981" />
+                  </div>
+                  <p className="text-sm text-slate-500">No malpractice events detected.</p>
+                  <p className="text-xs text-slate-400">Click <strong>Simulate AI Alert</strong> to generate a mock event.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <AnimatePresence>
+                  {events.map((ev, i) => (
+                    <AlertCard key={ev._id} ev={ev} index={i}
+                      onDismiss={() => handleDismiss(ev._id)}
+                      onInform={() => handleInformAdmin(ev._id)}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ══ NOTIFICATIONS ══ */}
+        {tab === 'notifications' && (
+          <motion.div key="notifications"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">Notifications</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{notifications.length} total</p>
+              </div>
+              {unread > 0 && (
+                <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                  style={{ background: '#fee2e2', color: '#b91c1c' }}>
+                  {unread} unread
+                </span>
+              )}
+            </div>
+
+            {notifications.length === 0 ? <EmptyState message="No notifications yet." /> : (
+              <div>
+                {notifications.map(n => (
+                  <div key={n._id} className={`notif-item${(!n.isRead && !n.read) ? ' unread' : ''}`}>
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                      style={{ background: n.type === 'alert' ? '#fee2e2' : '#ede9fe' }}>
+                      {n.type === 'alert'
+                        ? <ShieldAlert size={15} color="#b91c1c" />
+                        : <Bell size={15} color="#6d28d9" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-slate-700 leading-snug">{n.message}</p>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <Clock size={10} color="#94a3b8" />
+                        <p className="text-xs text-slate-400">{new Date(n.createdAt).toLocaleString()}</p>
                       </div>
-                      <p style={styles.bbInfo}>
-                        Bounding Box — x:{ev.bounding_box?.x} y:{ev.bounding_box?.y} w:{ev.bounding_box?.width} h:{ev.bounding_box?.height}
-                      </p>
-                      {ev.status === 'pending' && (
-                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
-                          <button style={styles.dismissBtn} onClick={() => handleDismiss(ev._id)}>Dismiss</button>
-                          <button style={styles.informBtn} onClick={() => handleInformAdmin(ev._id)}>Inform Admin</button>
-                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Badge status={n.type} />
+                      {(!n.isRead && !n.read) && (
+                        <button onClick={() => markRead(n._id)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors">
+                          Mark read
+                        </button>
                       )}
                     </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
         )}
 
-        {tab === 'notifications' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Notifications</h2>
-            {notifications.length === 0 ? <p style={styles.empty}>No notifications.</p> : (
-              <table style={styles.table}>
-                <thead>
-                  <tr style={styles.thead}>
-                    <th style={styles.th}>Message</th>
-                    <th style={styles.th}>Type</th>
-                    <th style={styles.th}>Time</th>
-                    <th style={styles.th}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {notifications.map(n => (
-                    <tr key={n._id} style={{ ...styles.tr, background: n.read ? '#fff' : '#fffbeb' }}>
-                      <td style={styles.td}>{n.message}</td>
-                      <td style={styles.td}><span style={{ ...styles.badge, background: n.type === 'alert' ? '#c0392b' : '#2b6cb0' }}>{n.type}</span></td>
-                      <td style={styles.td}>{new Date(n.createdAt).toLocaleString()}</td>
-                      <td style={styles.td}>
-                        {!n.read && <button style={styles.linkBtn} onClick={() => markRead(n._id)}>Mark Read</button>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+      </AnimatePresence>
+    </Layout>
   );
 };
 
-const styles = {
-  page: { minHeight: '100vh', background: '#f0f2f5' },
-  container: { maxWidth: '1200px', margin: '0 auto', padding: '1.5rem' },
-  tabs: { display: 'flex', gap: '0', marginBottom: '1.5rem', borderBottom: '2px solid #e2e8f0' },
-  tab: { padding: '10px 22px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', color: '#718096', borderBottom: '2px solid transparent', marginBottom: '-2px' },
-  activeTab: { color: '#1a2340', borderBottomColor: '#1a2340', fontWeight: 600 },
-  section: { background: '#fff', borderRadius: '8px', padding: '1.5rem', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' },
-  sectionTitle: { margin: '0 0 1.2rem', fontSize: '1.1rem', color: '#1a2340', fontWeight: 700 },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' },
-  thead: { background: '#f7fafc' },
-  th: { padding: '10px 12px', textAlign: 'left', color: '#4a5568', fontWeight: 600, borderBottom: '1px solid #e2e8f0' },
-  tr: { borderBottom: '1px solid #f0f2f5' },
-  td: { padding: '10px 12px', color: '#2d3748', verticalAlign: 'middle' },
-  badge: { color: '#fff', borderRadius: '10px', padding: '2px 10px', fontSize: '0.75rem', fontWeight: 600 },
-  activateBtn: { background: '#276749', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 14px', cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600 },
-  monitorBtn: { background: '#2b6cb0', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 14px', cursor: 'pointer', fontSize: '0.83rem' },
-  mockBtn: { background: '#744210', color: '#fff', border: 'none', borderRadius: '4px', padding: '7px 14px', cursor: 'pointer', fontSize: '0.83rem' },
-  stopBtn: { background: '#c0392b', color: '#fff', border: 'none', borderRadius: '4px', padding: '7px 14px', cursor: 'pointer', fontSize: '0.83rem' },
-  eventGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' },
-  eventCard: { border: '1px solid #e2e8f0', borderRadius: '6px', overflow: 'hidden' },
-  eventImg: { width: '100%', height: '160px', objectFit: 'cover', display: 'block', background: '#e2e8f0' },
-  eventBody: { padding: '0.8rem' },
-  eventTime: { fontSize: '0.78rem', color: '#718096' },
-  bbInfo: { fontSize: '0.75rem', color: '#a0aec0', margin: '0.4rem 0 0' },
-  dismissBtn: { background: '#e2e8f0', color: '#4a5568', border: 'none', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 },
-  informBtn: { background: '#c0392b', color: '#fff', border: 'none', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 },
-  linkBtn: { background: 'none', border: 'none', color: '#2b6cb0', cursor: 'pointer', fontSize: '0.85rem', textDecoration: 'underline', padding: 0 },
-  empty: { color: '#a0aec0', textAlign: 'center', padding: '2rem 0' },
+/* ── Premium Alert Card ── */
+const AlertCard = ({ ev, index, onDismiss, onInform }) => {
+  const isPending = ev.status === 'pending';
+  const bb = ev.bounding_box;
+
+  return (
+    <motion.div
+      className={`alert-card${isPending ? ' pending' : ''}`}
+      initial={{ opacity: 0, y: 22, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.94 }}
+      transition={{ duration: 0.3, delay: index * 0.06 }}
+      whileHover={{ y: -3 }}
+    >
+      {/* Image + overlays */}
+      <div className="alert-img-wrap">
+        <img src={ev.image_url} alt="Evidence" />
+
+        {/* Bounding box */}
+        {bb && (
+          <div className="bbox" style={{
+            left:   `${(bb.x / 320) * 100}%`,
+            top:    `${(bb.y / 240) * 100}%`,
+            width:  `${(bb.width  / 320) * 100}%`,
+            height: `${(bb.height / 240) * 100}%`,
+          }}>
+            <span className="bbox-label">DETECTED</span>
+          </div>
+        )}
+
+        {/* Top-left: live badge */}
+        {isPending && (
+          <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-bold text-white"
+            style={{ background: 'rgba(185,28,28,0.88)', backdropFilter: 'blur(4px)' }}>
+            <span className="relative flex w-2 h-2">
+              <span className="ping-ring" />
+              <span className="relative w-2 h-2 rounded-full bg-white" />
+            </span>
+            LIVE
+          </div>
+        )}
+
+        {/* Top-right: status badge */}
+        <div className="absolute top-2.5 right-2.5">
+          <Badge status={ev.status} />
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="p-4">
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-2.5">
+          <Clock size={11} />
+          {new Date(ev.timestamp).toLocaleString()}
+        </div>
+
+        {bb && (
+          <div className="flex items-center gap-1.5 mb-3 px-2.5 py-1.5 rounded-lg"
+            style={{ background: '#f8fafc', border: '1px solid #e8edf3' }}>
+            <ShieldAlert size={11} color="#94a3b8" />
+            <span className="text-xs font-mono text-slate-400">
+              x:{bb.x} y:{bb.y} · {bb.width}×{bb.height}px
+            </span>
+          </div>
+        )}
+
+        {isPending && (
+          <div className="flex gap-2">
+            <Btn variant="ghost" size="sm" className="flex-1 justify-center" onClick={onDismiss}>
+              Dismiss
+            </Btn>
+            <Btn variant="danger" size="sm" className="flex-1 justify-center" onClick={onInform}>
+              Inform Admin
+            </Btn>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
 };
+
+const EmptyState = ({ message }) => (
+  <div className="empty-state">
+    <div className="empty-icon-wrap">
+      <BookOpen size={22} color="#cbd5e1" />
+    </div>
+    <p className="text-sm">{message}</p>
+  </div>
+);
 
 export default FacultyDashboard;

@@ -15,6 +15,8 @@ const malpracticeEventSchema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'dismissed', 'confirmed'], default: 'pending' },
   reviewed_by_faculty: { type: Boolean, default: false },
   informed_admin: { type: Boolean, default: false },
+  acknowledged: { type: Boolean, default: false },
+  acknowledgedAt: { type: Date },
 }, { timestamps: true });
 
 module.exports = mongoose.model('MalpracticeEvent', malpracticeEventSchema);

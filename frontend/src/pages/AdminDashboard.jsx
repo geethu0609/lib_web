@@ -1,6 +1,21 @@
 import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  BookOpen, Users, ShieldAlert, Bell, Plus, Trash2,
+  ChevronDown, ChevronUp, ExternalLink, CheckCircle2, Search
+} from 'lucide-react';
 import api from '../api/axios';
-import Navbar from '../components/Navbar';
+import Layout from '../components/Layout';
+import StatCard from '../components/StatCard';
+import Badge from '../components/Badge';
+import Btn from '../components/Btn';
+
+const tabTitles = {
+  channels:      'All Channels',
+  create:        'Create Channel',
+  reports:       'Malpractice Reports',
+  notifications: 'Notifications',
+};
 
 const AdminDashboard = () => {
   const [tab, setTab] = useState('channels');
@@ -11,8 +26,10 @@ const AdminDashboard = () => {
   const [form, setForm] = useState({ exam_name: '', date: '', start_time: '', end_time: '' });
   const [rooms, setRooms] = useState([{ room_number: '', faculty_id: '' }]);
   const [selectedChannel, setSelectedChannel] = useState(null);
-  const [msg, setMsg] = useState('');
+  const [msg, setMsg] = useState({ text: '', ok: false });
   const [loading, setLoading] = useState(false);
+  const [reportSearch, setReportSearch] = useState('');
+  const [reportFilter, setReportFilter] = useState('all');
 
   const fetchAll = async () => {
     const [ch, rp, notifs] = await Promise.all([
@@ -30,256 +47,400 @@ const AdminDashboard = () => {
     fetchAll();
   }, []);
 
-  const addRoom = () => setRooms([...rooms, { room_number: '', faculty_id: '' }]);
+  const addRoom    = () => setRooms([...rooms, { room_number: '', faculty_id: '' }]);
   const removeRoom = (i) => setRooms(rooms.filter((_, idx) => idx !== i));
   const updateRoom = (i, field, val) => {
-    const updated = [...rooms];
-    updated[i][field] = val;
-    setRooms(updated);
+    const u = [...rooms]; u[i][field] = val; setRooms(u);
   };
 
   const handleCreateChannel = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setMsg('');
+    setMsg({ text: '', ok: false });
     try {
       const { data: channel } = await api.post('/admin/channels', form);
       await api.post(`/admin/channels/${channel._id}/rooms`, { rooms });
-      setMsg('Channel and rooms saved successfully.');
+      setMsg({ text: 'Channel and rooms saved successfully.', ok: true });
       setForm({ exam_name: '', date: '', start_time: '', end_time: '' });
       setRooms([{ room_number: '', faculty_id: '' }]);
       fetchAll();
     } catch (err) {
-      setMsg(err.response?.data?.message || 'Error saving channel');
+      setMsg({ text: err.response?.data?.message || 'Error saving channel', ok: false });
     } finally {
       setLoading(false);
     }
   };
 
-  const statusBadge = (s) => {
-    const colors = { inactive: '#718096', active: '#276749', completed: '#2b6cb0' };
-    return <span style={{ ...styles.badge, background: colors[s] || '#718096' }}>{s}</span>;
+  const handleNotifOpen = async () => {
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true, read: true })));
   };
 
-  const eventStatusBadge = (s) => {
-    const colors = { pending: '#b7791f', dismissed: '#718096', confirmed: '#c0392b' };
-    return <span style={{ ...styles.badge, background: colors[s] || '#718096' }}>{s}</span>;
+  const totalRooms  = channels.reduce((a, c) => a + (c.rooms?.length || 0), 0);
+  const activeExams = channels.filter(c => c.status === 'active').length;
+  const alertCount  = reports.filter(r => r.status === 'confirmed').length;
+  const unread      = notifications.filter(n => !n.isRead && !n.read).length;
+
+  const filteredReports = reports.filter(r => {
+    const matchSearch = !reportSearch ||
+      r.channel_id?.exam_name?.toLowerCase().includes(reportSearch.toLowerCase()) ||
+      r.room_id?.room_number?.toLowerCase().includes(reportSearch.toLowerCase()) ||
+      r.faculty_id?.name?.toLowerCase().includes(reportSearch.toLowerCase());
+    const matchFilter =
+      reportFilter === 'all' ||
+      (reportFilter === 'pending' && !r.acknowledged) ||
+      (reportFilter === 'acknowledged' && r.acknowledged);
+    return matchSearch && matchFilter;
+  });
+
+  const handleAcknowledge = async (id) => {
+    const { data } = await api.post(`/admin/events/${id}/acknowledge`);
+    setReports(prev => prev.map(r => r._id === id ? { ...r, acknowledged: data.acknowledged, acknowledgedAt: data.acknowledgedAt } : r));
   };
 
   return (
-    <div style={styles.page}>
-      <Navbar />
-      <div style={styles.container}>
-        <div style={styles.tabs}>
-          {['channels', 'create', 'reports', 'notifications'].map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{ ...styles.tab, ...(tab === t ? styles.activeTab : {}) }}>
-              {t === 'channels' ? 'All Channels' : t === 'create' ? 'Create Channel' : t === 'reports' ? 'Malpractice Reports' : 'Notifications'}
-            </button>
-          ))}
-        </div>
+    <Layout tab={tab} setTab={setTab} title={tabTitles[tab]}>
 
+      {/* ── Stat row ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-7">
+        <StatCard icon={BookOpen}    label="Total Channels"    value={channels.length} color="#6366f1" bg="#eef2ff" />
+        <StatCard icon={Users}       label="Total Rooms"       value={totalRooms}      color="#0891b2" bg="#ecfeff" />
+        <StatCard icon={ShieldAlert} label="Active Exams"      value={activeExams}     color="#059669" bg="#ecfdf5" sub={activeExams > 0 ? 'In progress' : undefined} />
+        <StatCard icon={Bell}        label="Confirmed Alerts"  value={alertCount}      color="#dc2626" bg="#fef2f2" sub={alertCount > 0 ? 'Needs review' : undefined} />
+      </div>
+
+      <AnimatePresence mode="wait">
+
+        {/* ══ CREATE CHANNEL ══ */}
         {tab === 'create' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Create Exam Channel</h2>
-            <form onSubmit={handleCreateChannel}>
-              <div style={styles.grid2}>
-                <div style={styles.field}>
-                  <label style={styles.label}>Exam Name</label>
-                  <input style={styles.input} value={form.exam_name} onChange={e => setForm({ ...form, exam_name: e.target.value })} required />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>Date</label>
-                  <input style={styles.input} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>Start Time</label>
-                  <input style={styles.input} type="time" value={form.start_time} onChange={e => setForm({ ...form, start_time: e.target.value })} required />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>End Time</label>
-                  <input style={styles.input} type="time" value={form.end_time} onChange={e => setForm({ ...form, end_time: e.target.value })} required />
-                </div>
+          <motion.div key="create"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">New Exam Channel</h2>
+                <p className="text-xs text-slate-400 mt-0.5">Fill in the details and assign faculty to rooms</p>
               </div>
+            </div>
 
-              <div style={{ marginTop: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
-                  <h3 style={styles.subTitle}>Rooms</h3>
-                  <button type="button" onClick={addRoom} style={styles.addBtn}>+ Add Room</button>
-                </div>
-                {rooms.map((room, i) => (
-                  <div key={i} style={styles.roomRow}>
+            <form onSubmit={handleCreateChannel} className="card-body">
+              {/* Channel fields — 2-col grid */}
+              <div className="form-grid mb-7">
+                {[
+                  { label: 'Exam Name',   key: 'exam_name',   type: 'text', placeholder: 'e.g. Final Semester Exam' },
+                  { label: 'Date',        key: 'date',        type: 'date' },
+                  { label: 'Start Time',  key: 'start_time',  type: 'time' },
+                  { label: 'End Time',    key: 'end_time',    type: 'time' },
+                ].map(f => (
+                  <div key={f.key}>
+                    <label className="form-label">{f.label}</label>
                     <input
-                      style={{ ...styles.input, flex: 1 }}
-                      placeholder="Room Number (e.g. A101)"
-                      value={room.room_number}
-                      onChange={e => updateRoom(i, 'room_number', e.target.value)}
+                      type={f.type}
+                      placeholder={f.placeholder}
+                      value={form[f.key]}
+                      onChange={e => setForm({ ...form, [f.key]: e.target.value })}
                       required
+                      className="form-input"
                     />
-                    <select
-                      style={{ ...styles.input, flex: 2 }}
-                      value={room.faculty_id}
-                      onChange={e => updateRoom(i, 'faculty_id', e.target.value)}
-                      required
-                    >
-                      <option value="">— Select Faculty —</option>
-                      {facultyList.map(f => <option key={f._id} value={f._id}>{f.name} ({f.email})</option>)}
-                    </select>
-                    {rooms.length > 1 && (
-                      <button type="button" onClick={() => removeRoom(i)} style={styles.removeBtn}>✕</button>
-                    )}
                   </div>
                 ))}
               </div>
 
-              {msg && <p style={{ color: msg.includes('success') ? '#276749' : '#c0392b', marginTop: '0.8rem' }}>{msg}</p>}
-              <button type="submit" style={styles.submitBtn} disabled={loading}>
-                {loading ? 'Saving...' : 'Save Channel'}
-              </button>
+              {/* Room assignments */}
+              <div className="border-t border-slate-100 pt-6">
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-700">Room Assignments</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">{rooms.length} room{rooms.length !== 1 ? 's' : ''} added</p>
+                  </div>
+                  <Btn variant="outline" size="sm" icon={Plus} onClick={addRoom} type="button">Add Room</Btn>
+                </div>
+
+                <div className="space-y-3">
+                  {rooms.map((room, i) => (
+                    <motion.div key={i}
+                      initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="room-row"
+                    >
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                        style={{ background: '#eef2ff', color: '#4f46e5' }}>
+                        {i + 1}
+                      </div>
+                      <input
+                        className="form-input"
+                        style={{ flex: '0 0 140px' }}
+                        placeholder="Room No. (e.g. A101)"
+                        value={room.room_number}
+                        onChange={e => updateRoom(i, 'room_number', e.target.value)}
+                        required
+                      />
+                      <select
+                        className="form-input"
+                        style={{ flex: 1 }}
+                        value={room.faculty_id}
+                        onChange={e => updateRoom(i, 'faculty_id', e.target.value)}
+                        required
+                      >
+                        <option value="">— Select Faculty —</option>
+                        {facultyList.map(f => (
+                          <option key={f._id} value={f._id}>{f.name} ({f.email})</option>
+                        ))}
+                      </select>
+                      {rooms.length > 1 && (
+                        <button type="button" onClick={() => removeRoom(i)}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 transition-colors flex-shrink-0">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Feedback */}
+              {msg.text && (
+                <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                  className="mt-5 flex items-center gap-2 p-3.5 rounded-xl text-sm"
+                  style={msg.ok
+                    ? { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }
+                    : { background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
+                  <CheckCircle2 size={15} />
+                  {msg.text}
+                </motion.div>
+              )}
+
+              <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button type="button" onClick={() => { setForm({ exam_name: '', date: '', start_time: '', end_time: '' }); setRooms([{ room_number: '', faculty_id: '' }]); setMsg({ text: '', ok: false }); }}
+                  className="btn btn-ghost btn-md">Clear</button>
+                <Btn type="submit" variant="primary" size="lg" disabled={loading}>
+                  {loading ? 'Saving…' : 'Save Channel'}
+                </Btn>
+              </div>
             </form>
-          </div>
+          </motion.div>
         )}
 
+        {/* ══ ALL CHANNELS ══ */}
         {tab === 'channels' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>All Exam Channels</h2>
-            {channels.length === 0 ? <p style={styles.empty}>No channels created yet.</p> : (
-              <table style={styles.table}>
-                <thead>
-                  <tr style={styles.thead}>
-                    <th style={styles.th}>Exam Name</th>
-                    <th style={styles.th}>Date</th>
-                    <th style={styles.th}>Time</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Rooms</th>
-                    <th style={styles.th}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels.map(ch => (
-                    <>
-                      <tr key={ch._id} style={styles.tr}>
-                        <td style={styles.td}>{ch.exam_name}</td>
-                        <td style={styles.td}>{new Date(ch.date).toLocaleDateString()}</td>
-                        <td style={styles.td}>{ch.start_time} – {ch.end_time}</td>
-                        <td style={styles.td}>{statusBadge(ch.status)}</td>
-                        <td style={styles.td}>{ch.rooms?.length || 0} room(s)</td>
-                        <td style={styles.td}>
-                          <button style={styles.linkBtn} onClick={() => setSelectedChannel(selectedChannel === ch._id ? null : ch._id)}>
-                            {selectedChannel === ch._id ? 'Hide Rooms' : 'View Rooms'}
-                          </button>
+          <motion.div key="channels"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">Exam Channels</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{channels.length} channel{channels.length !== 1 ? 's' : ''} total</p>
+              </div>
+              <Btn variant="primary" size="sm" icon={Plus} onClick={() => setTab('create')}>New Channel</Btn>
+            </div>
+
+            {channels.length === 0 ? <EmptyState message="No channels yet. Create your first exam channel." /> : (
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Exam Name', 'Date', 'Time', 'Status', 'Rooms', 'Actions'].map(h => (
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {channels.map(ch => (
+                      <>
+                        <tr key={ch._id}>
+                          <td className="font-semibold text-slate-800">{ch.exam_name}</td>
+                          <td>{new Date(ch.date).toLocaleDateString()}</td>
+                          <td className="font-mono text-xs">{ch.start_time} – {ch.end_time}</td>
+                          <td><Badge status={ch.status} /></td>
+                          <td>
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600">
+                              <Users size={11} /> {ch.rooms?.length || 0}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => setSelectedChannel(selectedChannel === ch._id ? null : ch._id)}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                            >
+                              {selectedChannel === ch._id
+                                ? <><ChevronUp size={13} /> Hide</>
+                                : <><ChevronDown size={13} /> Rooms</>}
+                            </button>
+                          </td>
+                        </tr>
+                        <AnimatePresence>
+                          {selectedChannel === ch._id && ch.rooms?.map(room => (
+                            <motion.tr key={room._id}
+                              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                              style={{ background: '#f8fafc' }}
+                            >
+                              <td colSpan={2} style={{ paddingLeft: '2.5rem' }}>
+                                <span className="text-indigo-400 mr-1.5 text-xs">↳</span>
+                                <span className="text-xs font-semibold text-slate-600">Room {room.room_number}</span>
+                              </td>
+                              <td colSpan={2} className="text-xs text-slate-500">{room.faculty_id?.name || '—'}</td>
+                              <td><Badge status={room.status} /></td>
+                              <td />
+                            </motion.tr>
+                          ))}
+                        </AnimatePresence>
+                      </>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ══ REPORTS ══ */}
+        {tab === 'reports' && (
+          <motion.div key="reports"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">Malpractice Reports</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{filteredReports.length} of {reports.length} events</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* Filter pills */}
+                <div className="flex items-center gap-1 p-1 rounded-xl" style={{ background: '#f1f5f9' }}>
+                  {['all', 'pending', 'acknowledged'].map(f => (
+                    <button key={f}
+                      onClick={() => setReportFilter(f)}
+                      className="text-xs font-semibold px-3 py-1 rounded-lg capitalize transition-all"
+                      style={reportFilter === f
+                        ? { background: '#fff', color: '#4f46e5', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }
+                        : { color: '#94a3b8' }}
+                    >{f}</button>
+                  ))}
+                </div>
+                <div className="search-wrap">
+                  <Search size={14} />
+                  <input
+                    className="search-input"
+                    placeholder="Search reports…"
+                    value={reportSearch}
+                    onChange={e => setReportSearch(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {filteredReports.length === 0 ? <EmptyState message="No malpractice events recorded." /> : (
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {['Room', 'Exam / Channel', 'Faculty', 'Timestamp', 'Ack. Status', 'Evidence', 'Action'].map(h => (
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredReports.map(ev => (
+                      <tr key={ev._id}>
+                        <td className="font-semibold text-slate-800">{ev.room_id?.room_number || '—'}</td>
+                        <td>{ev.channel_id?.exam_name || '—'}</td>
+                        <td>{ev.faculty_id?.name || '—'}</td>
+                        <td className="text-xs text-slate-400">{new Date(ev.timestamp).toLocaleString()}</td>
+                        <td>
+                          {ev.acknowledged
+                            ? <span className="badge badge-active">Acknowledged</span>
+                            : <span className="badge badge-pending">Pending</span>}
+                        </td>
+                        <td>
+                          <a href={ev.image_url} target="_blank" rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors">
+                            <ExternalLink size={11} /> View
+                          </a>
+                        </td>
+                        <td>
+                          {ev.acknowledged
+                            ? <span className="text-xs text-slate-400 font-medium flex items-center gap-1">
+                                <CheckCircle2 size={13} color="#16a34a" /> Done
+                              </span>
+                            : <button
+                                onClick={() => handleAcknowledge(ev._id)}
+                                className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
+                                style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+                              >Acknowledge</button>}
                         </td>
                       </tr>
-                      {selectedChannel === ch._id && ch.rooms?.map(room => (
-                        <tr key={room._id} style={{ background: '#f7fafc' }}>
-                          <td style={{ ...styles.td, paddingLeft: '2rem', color: '#4a5568' }} colSpan={2}>↳ Room {room.room_number}</td>
-                          <td style={styles.td} colSpan={2}>{room.faculty_id?.name || '—'}</td>
-                          <td style={styles.td}>{statusBadge(room.status)}</td>
-                          <td style={styles.td}></td>
-                        </tr>
-                      ))}
-                    </>
-                  ))}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-          </div>
+          </motion.div>
         )}
 
-        {tab === 'reports' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Malpractice Reports</h2>
-            {reports.length === 0 ? <p style={styles.empty}>No malpractice events recorded.</p> : (
-              <table style={styles.table}>
-                <thead>
-                  <tr style={styles.thead}>
-                    <th style={styles.th}>Exam</th>
-                    <th style={styles.th}>Room</th>
-                    <th style={styles.th}>Faculty</th>
-                    <th style={styles.th}>Timestamp</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Evidence</th>
-                    <th style={styles.th}>Bounding Box</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.map(ev => (
-                    <tr key={ev._id} style={styles.tr}>
-                      <td style={styles.td}>{ev.channel_id?.exam_name || '—'}</td>
-                      <td style={styles.td}>{ev.room_id?.room_number || '—'}</td>
-                      <td style={styles.td}>{ev.faculty_id?.name || '—'}</td>
-                      <td style={styles.td}>{new Date(ev.timestamp).toLocaleString()}</td>
-                      <td style={styles.td}>{eventStatusBadge(ev.status)}</td>
-                      <td style={styles.td}>
-                        <a href={ev.image_url} target="_blank" rel="noreferrer" style={styles.linkBtn}>View Image</a>
-                      </td>
-                      <td style={{ ...styles.td, fontSize: '0.78rem', color: '#718096' }}>
-                        x:{ev.bounding_box?.x} y:{ev.bounding_box?.y} w:{ev.bounding_box?.width} h:{ev.bounding_box?.height}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-
+        {/* ══ NOTIFICATIONS ══ */}
         {tab === 'notifications' && (
-          <div style={styles.section}>
-            <h2 style={styles.sectionTitle}>Notifications</h2>
-            {notifications.length === 0 ? <p style={styles.empty}>No notifications.</p> : (
-              <table style={styles.table}>
-                <thead>
-                  <tr style={styles.thead}>
-                    <th style={styles.th}>Message</th>
-                    <th style={styles.th}>Type</th>
-                    <th style={styles.th}>Time</th>
-                    <th style={styles.th}>Read</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {notifications.map(n => (
-                    <tr key={n._id} style={{ ...styles.tr, background: n.read ? '#fff' : '#fffbeb' }}>
-                      <td style={styles.td}>{n.message}</td>
-                      <td style={styles.td}><span style={{ ...styles.badge, background: n.type === 'alert' ? '#c0392b' : '#2b6cb0' }}>{n.type}</span></td>
-                      <td style={styles.td}>{new Date(n.createdAt).toLocaleString()}</td>
-                      <td style={styles.td}>{n.read ? '✓' : '●'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <motion.div key="notifications"
+            initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="card"
+          >
+            <div className="card-header">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">Notifications</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{notifications.length} total</p>
+              </div>
+              {unread > 0 && (
+                <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                  style={{ background: '#fee2e2', color: '#b91c1c' }}>
+                  {unread} unread
+                </span>
+              )}
+            </div>
+
+            {notifications.length === 0 ? <EmptyState message="No notifications yet." /> : (
+              <div>
+                {notifications.map(n => (
+                  <div key={n._id} className={`notif-item${(!n.isRead && !n.read) ? ' unread' : ''}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0`}
+                      style={{ background: n.type === 'alert' ? '#fee2e2' : '#ede9fe' }}>
+                      {n.type === 'alert'
+                        ? <ShieldAlert size={15} color="#b91c1c" />
+                        : <Bell size={15} color="#6d28d9" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-slate-700 leading-snug">{n.message}</p>
+                      <p className="text-xs text-slate-400 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Badge status={n.type} />
+                      {(!n.isRead && !n.read) && <span className="relative flex w-2 h-2">
+                        <span className="ping-ring" />
+                        <span className="relative w-2 h-2 rounded-full bg-indigo-500" />
+                      </span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-          </div>
+          </motion.div>
         )}
-      </div>
-    </div>
+
+      </AnimatePresence>
+    </Layout>
   );
 };
 
-const styles = {
-  page: { minHeight: '100vh', background: '#f0f2f5' },
-  container: { maxWidth: '1200px', margin: '0 auto', padding: '1.5rem' },
-  tabs: { display: 'flex', gap: '0', marginBottom: '1.5rem', borderBottom: '2px solid #e2e8f0' },
-  tab: { padding: '10px 22px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', color: '#718096', borderBottom: '2px solid transparent', marginBottom: '-2px' },
-  activeTab: { color: '#1a2340', borderBottomColor: '#1a2340', fontWeight: 600 },
-  section: { background: '#fff', borderRadius: '8px', padding: '1.5rem', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' },
-  sectionTitle: { margin: '0 0 1.2rem', fontSize: '1.1rem', color: '#1a2340', fontWeight: 700 },
-  subTitle: { margin: 0, fontSize: '0.95rem', color: '#2d3748', fontWeight: 600 },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  label: { fontSize: '0.82rem', color: '#4a5568', fontWeight: 600 },
-  input: { padding: '9px 11px', border: '1px solid #cbd5e0', borderRadius: '4px', fontSize: '0.9rem', outline: 'none' },
-  roomRow: { display: 'flex', gap: '0.8rem', alignItems: 'center', marginBottom: '0.6rem' },
-  addBtn: { background: '#2b6cb0', color: '#fff', border: 'none', borderRadius: '4px', padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem' },
-  removeBtn: { background: '#fed7d7', color: '#c0392b', border: 'none', borderRadius: '4px', padding: '6px 10px', cursor: 'pointer' },
-  submitBtn: { marginTop: '1.2rem', padding: '10px 28px', background: '#1a2340', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.95rem' },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' },
-  thead: { background: '#f7fafc' },
-  th: { padding: '10px 12px', textAlign: 'left', color: '#4a5568', fontWeight: 600, borderBottom: '1px solid #e2e8f0' },
-  tr: { borderBottom: '1px solid #f0f2f5' },
-  td: { padding: '10px 12px', color: '#2d3748', verticalAlign: 'middle' },
-  badge: { color: '#fff', borderRadius: '10px', padding: '2px 10px', fontSize: '0.75rem', fontWeight: 600 },
-  linkBtn: { background: 'none', border: 'none', color: '#2b6cb0', cursor: 'pointer', fontSize: '0.85rem', textDecoration: 'underline', padding: 0 },
-  empty: { color: '#a0aec0', textAlign: 'center', padding: '2rem 0' },
-};
+const EmptyState = ({ message }) => (
+  <div className="empty-state">
+    <div className="empty-icon-wrap">
+      <BookOpen size={22} color="#cbd5e1" />
+    </div>
+    <p className="text-sm">{message}</p>
+  </div>
+);
 
 export default AdminDashboard;

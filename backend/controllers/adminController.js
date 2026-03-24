@@ -69,4 +69,22 @@ const getFacultyUsers = async (req, res) => {
   }
 };
 
-module.exports = { createChannel, addRooms, getChannels, getMalpracticeReports, getFacultyUsers };
+const acknowledgeEvent = async (req, res) => {
+  try {
+    const event = await MalpracticeEvent.findByIdAndUpdate(
+      req.params.id,
+      { acknowledged: true, acknowledgedAt: new Date() },
+      { new: true }
+    )
+      .populate('channel_id', 'exam_name date')
+      .populate('room_id', 'room_number')
+      .populate('faculty_id', 'name email');
+    
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+    res.json(event);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { createChannel, addRooms, getChannels, getMalpracticeReports, getFacultyUsers, acknowledgeEvent };

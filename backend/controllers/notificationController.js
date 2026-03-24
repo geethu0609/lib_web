@@ -11,11 +11,29 @@ const getNotifications = async (req, res) => {
 
 const markRead = async (req, res) => {
   try {
-    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    await Notification.findByIdAndUpdate(req.params.id, { read: true, isRead: true });
     res.json({ message: 'Marked as read' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { getNotifications, markRead };
+const getUnreadCount = async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({ user_id: req.user.id, isRead: false });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+const markAllRead = async (req, res) => {
+  try {
+    await Notification.updateMany({ user_id: req.user.id, isRead: false }, { isRead: true, read: true });
+    res.json({ message: 'All marked as read' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { getNotifications, markRead, getUnreadCount, markAllRead };

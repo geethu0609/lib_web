@@ -72,4 +72,17 @@ const informAdmin = async (req, res) => {
   }
 };
 
-module.exports = { getFacultyChannels, activateRoom, getRoomEvents, dismissEvent, informAdmin };
+const deactivateRoom = async (req, res) => {
+  try {
+    const room = await Room.findById(req.params.id);
+    if (!room) return res.status(404).json({ message: 'Room not found' });
+    if (room.faculty_id.toString() !== req.user.id) return res.status(403).json({ message: 'Not authorized' });
+    room.status = 'inactive';
+    await room.save();
+    res.json(room);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { getFacultyChannels, activateRoom, deactivateRoom, getRoomEvents, dismissEvent, informAdmin };
